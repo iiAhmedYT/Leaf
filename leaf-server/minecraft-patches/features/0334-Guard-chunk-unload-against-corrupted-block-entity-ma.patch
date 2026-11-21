@@ -1,0 +1,52 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: iiAhmedYT <61851106+iiAhmedYT@users.noreply.github.com>
+Date: Sat, 21 Nov 2026 22:02:12 +0200
+Subject: [PATCH] Guard chunk unload against corrupted block entity maps
+
+A chunk's block entity map can be corrupted by an off-thread writer, for
+example a plugin touching chunk data from a non-tick thread. Iterating it
+during ServerLevel#unload then throws NullPointerException,
+ConcurrentModificationException or ArrayIndexOutOfBoundsException, which
+aborts the world tick and crashes the server with 'Exception ticking world'.
+
+Catch those three exception types around the block entity loop, log the
+chunk position, dimension and exception once, and continue the unload as
+normal. Throwable is deliberately not caught so real errors still surface.
+
+diff --git a/net/minecraft/server/level/ServerLevel.java b/net/minecraft/server/level/ServerLevel.java
+index 8ab5d05bd88acfa21bc0237e3556b441c5425dea..05a5832bf29a3ac70e85d85340dbd92a78f922a8 100644
+--- a/net/minecraft/server/level/ServerLevel.java
++++ b/net/minecraft/server/level/ServerLevel.java
+@@ -1985,17 +1985,24 @@ public class ServerLevel extends Level implements WorldGenLevel, ServerEntityGet
+ 
+     public void unload(final LevelChunk levelChunk) {
+         // Spigot start
+-        for (net.minecraft.world.level.block.entity.BlockEntity blockEntity : levelChunk.getBlockEntities().values()) {
+-            if (blockEntity instanceof net.minecraft.world.Container) {
+-                // Paper start - this area looks like it can load chunks, change the behavior
+-                // chests for example can apply physics to the world
+-                // so instead we just change the active container and call the event
+-                for (org.bukkit.entity.HumanEntity human : Lists.newArrayList(((net.minecraft.world.Container) blockEntity).getViewers())) {
+-                    ((org.bukkit.craftbukkit.entity.CraftHumanEntity) human).getHandle().closeUnloadedInventory(org.bukkit.event.inventory.InventoryCloseEvent.Reason.UNLOADED); // Paper - Inventory close reason
++        // Leaf start - Guard against corrupted block entity maps during chunk unload
++        try {
++            for (net.minecraft.world.level.block.entity.BlockEntity blockEntity : levelChunk.getBlockEntities().values()) {
++                if (blockEntity instanceof net.minecraft.world.Container) {
++                    // Paper start - this area looks like it can load chunks, change the behavior
++                    // chests for example can apply physics to the world
++                    // so instead we just change the active container and call the event
++                    for (org.bukkit.entity.HumanEntity human : Lists.newArrayList(((net.minecraft.world.Container) blockEntity).getViewers())) {
++                        ((org.bukkit.craftbukkit.entity.CraftHumanEntity) human).getHandle().closeUnloadedInventory(org.bukkit.event.inventory.InventoryCloseEvent.Reason.UNLOADED); // Paper - Inventory close reason
++                    }
++                    // Paper end - this area looks like it can load chunks, change the behavior
+                 }
+-                // Paper end - this area looks like it can load chunks, change the behavior
+             }
++        } catch (NullPointerException | java.util.ConcurrentModificationException | ArrayIndexOutOfBoundsException ex) {
++            // The block entity map of a chunk can be corrupted by off-thread writes. Never let that abort the unload.
++            LOGGER.error("Failed to process block entities of chunk {} in dimension {} while unloading, continuing unload", levelChunk.getPos(), this.dimension().identifier(), ex);
+         }
++        // Leaf end - Guard against corrupted block entity maps during chunk unload
+         // Spigot end
+         levelChunk.clearAllBlockEntities();
+         levelChunk.unregisterTickContainerFromLevel(this);

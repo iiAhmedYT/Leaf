@@ -1,0 +1,60 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: iiAhmedYT <61851106+iiAhmedYT@users.noreply.github.com>
+Date: Sat, 21 Nov 2026 22:02:12 +0200
+Subject: [PATCH] Add off-thread block entity map write detector
+
+Chunk block entity and ticker map corruption is hard to attribute to a
+plugin after the fact. Add a debug-only detector around the map writers in
+LevelChunk: setBlockEntity, removeBlockEntity, addAndRegisterBlockEntity,
+updateBlockEntityTicker and clearAllBlockEntities.
+
+It is enabled with -Dleaf.debug.chunkmapthreads=true and uses the existing
+Moonrise TickThread check to decide whether the current thread owns the
+chunk. On a mismatch it logs the operation, thread name, chunk position,
+dimension and a stack trace, rate-limited to one message per second and at
+most 200 messages. It only logs and never changes behavior.
+
+diff --git a/net/minecraft/world/level/chunk/LevelChunk.java b/net/minecraft/world/level/chunk/LevelChunk.java
+index 83bd58a65b1b27ebddfeaf2477e00dbf6268246f..f529fac0a05fec66a4922a3d25589a8a0913f8ac 100644
+--- a/net/minecraft/world/level/chunk/LevelChunk.java
++++ b/net/minecraft/world/level/chunk/LevelChunk.java
+@@ -577,6 +577,7 @@ public class LevelChunk extends ChunkAccess implements DebugValueSource, ca.spot
+     }
+ 
+     public void addAndRegisterBlockEntity(final BlockEntity blockEntity) {
++        org.dreeam.leaf.debug.ChunkBlockEntityThreadDebug.check(this.level, this.getPos(), "addAndRegisterBlockEntity"); // Leaf - off-thread block entity write detector
+         this.setBlockEntity(blockEntity);
+         if (this.isInLevel()) {
+             if (this.level instanceof ServerLevel serverLevel) {
+@@ -602,6 +603,7 @@ public class LevelChunk extends ChunkAccess implements DebugValueSource, ca.spot
+ 
+     @Override
+     public void setBlockEntity(final BlockEntity blockEntity) {
++        org.dreeam.leaf.debug.ChunkBlockEntityThreadDebug.check(this.level, this.getPos(), "setBlockEntity"); // Leaf - off-thread block entity write detector
+         BlockPos pos = blockEntity.getBlockPos();
+         BlockState blockState = this.getBlockState(pos);
+         if (!blockState.hasBlockEntity()) {
+@@ -656,6 +658,7 @@ public class LevelChunk extends ChunkAccess implements DebugValueSource, ca.spot
+ 
+     @Override
+     public void removeBlockEntity(final BlockPos pos) {
++        org.dreeam.leaf.debug.ChunkBlockEntityThreadDebug.check(this.level, this.getPos(), "removeBlockEntity"); // Leaf - off-thread block entity write detector
+         if (this.isInLevel()) {
+             BlockEntity removeThis = this.blockEntities.remove(pos);
+             // CraftBukkit start - SPIGOT-5561: Also remove from pending map
+@@ -953,6 +956,7 @@ public class LevelChunk extends ChunkAccess implements DebugValueSource, ca.spot
+     }
+ 
+     public void clearAllBlockEntities() {
++        org.dreeam.leaf.debug.ChunkBlockEntityThreadDebug.check(this.level, this.getPos(), "clearAllBlockEntities"); // Leaf - off-thread block entity write detector
+         this.blockEntities.values().forEach(BlockEntity::setRemoved);
+         this.blockEntities.clear();
+         this.tickersInLevel.values().forEach(ticker -> ticker.rebind(NULL_TICKER));
+@@ -980,6 +984,7 @@ public class LevelChunk extends ChunkAccess implements DebugValueSource, ca.spot
+     }
+ 
+     private <T extends BlockEntity> void updateBlockEntityTicker(final T blockEntity) {
++        org.dreeam.leaf.debug.ChunkBlockEntityThreadDebug.check(this.level, this.getPos(), "updateBlockEntityTicker"); // Leaf - off-thread block entity write detector
+         if (!this.level.paperConfig().unsupportedSettings.ticking.blockEntities) return; // Paper - option to disable ticking
+         BlockState state = blockEntity.getBlockState();
+         BlockEntityTicker<T> ticker = state.getTicker(this.level, (BlockEntityType<T>)blockEntity.getType());
